@@ -18,7 +18,7 @@ def main():
     
     if not args.hostname.endswith('.'): args.hostname = args.hostname + '.'
     
-    log('Looking for Route53 record for %s' % args.hostname)
+    log('Looking for Route53 zone for %s' % args.hostname)
     
     zones = r53.list_hosted_zones()
     
@@ -37,10 +37,12 @@ def main():
     
     if zone_id is None:
         raise Exception('No Route53 zone found for %s' % args.hostname)
+    else:
+        log("Found zone ID %s" % zone_id)
     
     log('Getting existing record\'s TTL')
     
-    ttl = 60 # default to use if the record doesn't exist
+    ttl = None
     
     record_sets = r53.list_resource_record_sets(
         HostedZoneId=zone_id, StartRecordName=args.hostname, StartRecordType='A', MaxItems='1'
@@ -50,3 +52,33 @@ def main():
         # Because we're only using StartRecordName to filter, if the record doesn't exist then we might have some other record:
         if record_set['Name'] == args.hostname:
             ttl = record_set['TTL']
+    
+    if ttl is None:
+        ttl = 60
+        log("No existing record found. New record will have TTL of %d" % ttl)
+    else:
+        log("Found existing record with TTL %d" % ttl)
+    
+    ec2 = boto3.resource('ec2')
+    
+    log("Fetching EC2 instance information")
+    instance = next(iter(ec2.instances.filter(InstanceIds=[args.instance_id])))
+    
+    ipv4_address = instance.public_ip_address
+    log("Found IPv4 address %s" % ipv4_address)
+    
+    ipv6_address = None
+    network_interfaces = getattr(instance, 'network_interfaces', None)
+    if network_interfaces is not None and len(network_interfaces) > 0:
+        if len(network_interfaces) != 1:
+            raise Exception("This tool doesn't support instances with more than one network interface.")
+        ipv6_addresses = getattr(network_interfaces[0], 'ipv6_addresses', None)
+        if ipv6_addresses is not None and len(ipv6_addresses) > 0:
+            if len(ipv6_addresses) != 1:
+                raise Exception("This tool doesn't support instances with more than one IPv6 address.")
+            ipv6_address = ipv6_addresses[0]['Ipv6Address']
+    
+    if ipv6_address is None:
+        log("No IPv6 address found")
+    else:
+        log("Found IPv6 address %s" % ipv6_address)
